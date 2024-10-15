@@ -1,194 +1,343 @@
 import re
 import os
-import logging
-from playwright.sync_api import Error, sync_playwright
+import logging as logger
+import asyncio
+from playwright.async_api import (
+    Error,
+    async_playwright,
+    Playwright,
+    BrowserContext,
+    Page,
+)
+from typing import Optional, Callable, Dict, Any, List
 import time
+import sys
 
 BROWSER_INSTANCE = "chromium"
 HEADLESS = False
 USER_DATA_DIR = "user_data"
+BASE_URL = "https://web.whatsapp.com/"
 
 
 class WhatsappClient:
     def __init__(self) -> None:
         self.setup_logger()
-        logging.info("Starting Playwright...")
-        self.playwright = sync_playwright().start()
-        self.sent_messages = []
+        logger.info("Starting Playwright...")
+        self.playwright: Optional[Playwright] = None
+        self.browser: Optional[BrowserContext] = None
+        self.page_instance: Optional[Page] = None
+        self.sent_messages = []  # TODO: delete
 
-        logging.info(f"Launching {BROWSER_INSTANCE} with persistent context...")
-        self.browser = self.playwright[BROWSER_INSTANCE].launch_persistent_context(
-            USER_DATA_DIR, headless=HEADLESS
-        )
-        self.page = self.browser.new_page()
-        logging.info(f"{BROWSER_INSTANCE} launched successfully.")
+    @property
+    def page(self) -> Page:
+        assert self.page_instance is not None, "Page has not been initialized."
+        return self.page_instance
 
     def setup_logger(self):
         """Initializes and configures the logger."""
-        logging.basicConfig(
+        logger.basicConfig(
             format="%(asctime)s - %(levelname)s - %(message)s",
-            level=logging.INFO,
+            level=logger.INFO,
             handlers=[
-                logging.FileHandler("whatsapp_client.log"),  # Log to a file
-                logging.StreamHandler(),  # Log to console
+                logger.FileHandler("whatsapp_client.log"),  # Log to a file
+                logger.StreamHandler(),  # Log to console
             ],
         )
-        logging.info("Logger initialized.")
+        logger.info("Logger initialized.")
 
-    def login(self):
+    async def initialize_playwright(self):
+        self.playwright = await async_playwright().start()
+        logger.info(f"Launching {BROWSER_INSTANCE} with persistent context...")
+        self.browser = await self.playwright[
+            BROWSER_INSTANCE
+        ].launch_persistent_context(USER_DATA_DIR, headless=HEADLESS)
+        self.page_instance = await self.browser.new_page()
+        logger.info(f"{BROWSER_INSTANCE} launched successfully.")
+
+    async def login(self):
         if os.path.exists(USER_DATA_DIR):
-            logging.info("User is already logged in. Skipping login step.")
+            logger.info("User is already logged in. Skipping login step.")
         else:
-            logging.info("User not logged in. Redirecting to WhatsApp login page.")
+            logger.info("User not logged in. Redirecting to WhatsApp login page.")
 
-        self.page.goto("https://web.whatsapp.com")
+        await self.page.goto(BASE_URL)
+        await self.page.bring_to_front()
 
-        logging.info("Waiting for WhatsApp chats to load...")
-        self.page.wait_for_selector(
-            '//*[@id="pane-side"]/div[2]/div/div/child::div', timeout=60000
+        logger.info("Waiting for WhatsApp chats to load...")
+        await self.page.wait_for_selector(
+            '//*[@id="pane-side"]/div[2]/div/div/child::div', timeout=600000
         )
-        logging.info("WhatsApp chats loaded.")
+        logger.info("WhatsApp chats loaded.")
 
-    def clearScreen(self):
-        logging.info("Clearing the screen (Ctrl+A, Backspace).")
-        self.page.keyboard.down("Control")
-        self.page.keyboard.press("A")
-        self.page.keyboard.up("Control")
-        self.page.keyboard.press("Backspace")
+    async def logout(self):
+        try:
+            # Click the menu button -> logout option -> confirm logout
+            await self.page.locator(
+                'div[role="button"][title="Menu"][aria-label="Menu"][data-tab="2"]'
+            ).click(timeout=5000)
 
-    def openChatPanelUsingName(self, name: str):
-        logging.info(f"Opening chat panel for contact: {name}.")
+            await self.page.locator('div[role="button"][aria-label="Log out"]').click(
+                timeout=5000
+            )
+
+            await self.page.locator(
+                'div:has(h1:text("Log out?")) button:has-text("Log out")'
+            ).click(timeout=5000)
+
+            return True
+        except TimeoutError as e:
+            logger.exception(f"Timeout error during logout: {str(e)}")
+        except Exception as e:
+            logger.exception(f"Unexpected error during logout: {str(e)}")
+
+        logger.error("Logout failed")
+        return False
+
+    def get_search_box_locator(self):
+        return self.page.locator(
+            "#side div[contenteditable='true'][role='textbox'][data-lexical-editor='true']"
+        )
+
+    async def get_focused_element_locator(self):
+        """returns None | locator for current focused element"""
+        try:
+            # Generate a unique selector for the active (focused) element
+            selector = await self.page.evaluate(
+                """
+                () => {
+                    const activeElement = document.activeElement;
+                    if (!activeElement) return null;
+                    
+                    // Helper function to generate a unique selector
+                    const getSelector = (el) => {
+                        if (el.id) {
+                            return `#${el.id}`;
+                        }
+                        if (el === document.body) {
+                            return 'body';
+                        }
+                        let selector = el.tagName.toLowerCase();
+                        
+                        // Add classes if available
+                        if (el.className && typeof el.className === 'string') {
+                            const classes = el.className.trim().split(/\\s+/).join('.');
+                            selector += `.${classes}`;
+                        }
+                        
+                        // Get the element's position among its siblings
+                        const parent = el.parentElement;
+                        if (parent) {
+                            const siblings = Array.from(parent.children).filter(
+                                (child) => child.tagName === el.tagName
+                            );
+                            if (siblings.length > 1) {
+                                const index = siblings.indexOf(el) + 1;
+                                selector += `:nth-of-type(${index})`;
+                            }
+                        }
+                        
+                        // Recursively build the selector
+                        return parent ? `${getSelector(parent)} > ${selector}` : selector;
+                    };
+                    
+                    return getSelector(activeElement);
+                }
+            """
+            )
+
+            if not selector:
+                logger.info("No focused element found.")
+                return None
+
+            logger.info(f"Generated selector: {selector}")
+
+            locator = self.page.locator(selector)
+
+            # Optionally, verify that the locator actually points to the active element
+            is_visible = await locator.is_visible()
+            if is_visible:
+                return locator
+            else:
+                logger.info("Locator does not point to a visible element.")
+                return None
+
+        except Exception as e:
+            logger.exception(f"Error in get_focused_element_locator: {e}")
+            return None
+
+    async def clear_text(self):
+        """requires you to import sys"""
+
+        if sys.platform == "darwin":
+            await self.page.keyboard.press("Meta+A")
+            await self.page.keyboard.press("Backspace")
+        else:
+            await self.page.keyboard.press("Control+A")
+            await self.page.keyboard.press("Backspace")
+
+    async def find_user(self, username: str) -> str | bool:
+        """
+        Returns str | bool: chat_name if the chat is found, False otherwise.
+        """
+        try:
+            search_box = self.get_search_box_locator()
+
+            await search_box.click()
+            await self.clear_text()
+            await search_box.type(username)
+            await search_box.press("Enter")
+
+            chat_name = await self.page.locator(
+                selector='#main header ._amig span[dir="auto"]'
+            ).first.inner_text()
+
+            if chat_name and chat_name.upper().startswith(username.upper()):
+                logger.info(f'Username with prefix "{username}" found as "{chat_name}"')
+                return chat_name
+            else:
+                logger.info(f'Username with prefix "{username}" not found')
+                return False
+        except TimeoutError:
+            logger.exception(f'It was not possible to fetch chat "{username}"')
+            return False
+
+    async def find_user_phone(self, mobile: str) -> None:
+        try:
+            suffix_link = "https://web.whatsapp.com/send?phone={mobile}&text&type=phone_number&app_absent=1"
+            link = suffix_link.format(mobile=mobile)
+            await self.page.goto(link)
+            await self.page.wait_for_load_state("networkidle")
+        except TimeoutError as bug:
+            logger.exception(f"An exception occurred: {bug}")
+            await self.page.wait_for_timeout(1000)
+            await self.find_user_phone(mobile)
+
+    async def openChatPanelUsingName(self, name: str):
+        logger.info(f"Opening chat panel for contact: {name}.")
         search_input_selector = (
             "div[contenteditable='true'][role='textbox'][data-lexical-editor='true']"
         )
-        self.page.wait_for_selector(search_input_selector, timeout=60000)
-        search_input = self.page.query_selector(search_input_selector)
+        await self.page.wait_for_selector(search_input_selector, timeout=60000)
+        search_input = await self.page.query_selector(search_input_selector)
 
         if search_input:
-            logging.info(
-                f"Found search input for contact: {name}. Typing contact name."
-            )
-            search_input.click()
+            logger.info(f"Found search input for contact: {name}. Typing contact name.")
+            await search_input.click()
 
-            self.clearScreen()
+            await self.clear_text()
 
-            search_input.type(name, delay=20)
-            self.page.keyboard.press("Enter")
+            await search_input.type(name, delay=20)
+            await self.page.keyboard.press("Enter")
         else:
-            logging.error(f"Search input for contact {name} not found.")
+            logger.error(f"Search input for contact {name} not found.")
 
         return search_input
 
-    def sendMessage(self, name: str, message: str):
-        logging.info(f"Sending message to {name}: {message}")
-        page = self.page
-        search_input = self.openChatPanelUsingName(name)
+    async def sendMessage(self, name: str, message: str):
+        logger.info(f"Sending message to {name}: {message}")
+        search_input = await self.openChatPanelUsingName(name)
 
         if search_input:
-            self.clearScreen()
-
-            page.keyboard.type(message, delay=20)
-            page.keyboard.press("Enter")
-            page.wait_for_timeout(100)
-            page.keyboard.press("Enter")
-
-            page.wait_for_timeout(200)
-            if len(self.sent_messages) >= 20:
-                self.sent_messages.pop(0)
-            self.sent_messages.append(message)
-            logging.info(f"Message sent to {name}: {message}")
+            await self.clear_text()
+            await self.page.keyboard.type(message, delay=20)
+            await self.page.keyboard.press("Enter")
+            await self.page.wait_for_timeout(100)
+            await self.page.keyboard.press("Enter")
         else:
-            logging.error(f"Failed to send message to {name}. Search input not found.")
+            logger.error(f"Failed to send message to {name}. Search input not found.")
 
-    def extract_message_details(self, message):
-        logging.info("Extracting message details.")
-        name_element = message.query_selector("div._ak8q > div > span")
-        name = name_element.inner_text() if name_element else "N/A"
-        logging.info(f"Extracted name: {name}")
+    async def parse_whatsapp_messages(self) -> List[Dict]:
+        """
+        Parses all the message rows inside the main div of WhatsApp Web and returns
+        a list of message objects containing sender, time_sent, and message.
 
-        time_element = message.query_selector("div._ak8i")
-        time = time_element.inner_text() if time_element else "N/A"
-        logging.info(f"Extracted time: {time}")
+        Args:
+            page (Page): The Playwright Page object representing WhatsApp Web.
 
-        message_element = message.query_selector("div._ak8k > span > span")
-        message_text = message_element.inner_text() if message_element else "N/A"
-        logging.info(f"Extracted message: {message_text}")
+        Returns:
+            List[Dict]: A list of dictionaries, each representing a message with its details.
+        """
+        messages = []
 
-        return {"name": name, "time": time, "message": message_text}
+        # Wait for the main messages container to load
+        await self.page.wait_for_selector("#main")
 
-    def fetchLatestMessage(self):
-        logging.info("Fetching the latest message.")
-        selector = '//*[@id="pane-side"]/div[2]/div/div/child::div'
-        page = self.page
-        page.wait_for_selector(selector)
-        list_items = page.query_selector_all(selector)
+        # Select all message rows
+        # TODO: update this to also include divs containg the day information
+        rows = await self.page.query_selector_all("#main div[role='row']")
 
-        for item in list_items:
-            transform = item.evaluate(
-                "element => window.getComputedStyle(element).transform"
-            )
-
-            if transform:
-                if "matrix" in transform:
-                    parts = (
-                        transform.replace("matrix(", "").replace(")", "").split(", ")
-                    )
-                    if len(parts) == 6:
-                        translate_y = float(parts[5])
-                        if translate_y == 0:
-                            logging.info("Found latest message.")
-                            return self.extract_message_details(item)
-                elif "translateY(0px)" in transform:
-                    logging.info("Div with translateY(0px) found.")
-                    return self.extract_message_details(item)
-
-        logging.info("Desired div not found.")
-        return None
-
-    def onNewMessage(self, callbackFunction):
-        logging.info("Starting to listen for new messages.")
-        new_message = self.fetchLatestMessage()
-        assert new_message is not None
-
-        name = new_message.get("name", None)
-
-        iteration_count = 0
-
-        while True:
+        for row in rows:
             try:
-                # Check for new WhatsApp messages
-                new_message = self.fetchLatestMessage()
-                if new_message:
-                    if not (
-                        (
-                            new_message.get("message") in self.sent_messages
-                            or new_message.get("message") == "N/A"
-                        )
-                        and new_message.get("name", None) == name
-                    ):
-                        name = new_message.get("name", None)
-                        messages = self.getChatHistory(10)
-                        logging.info(f"New message received: {messages}")
-                        callbackFunction(new_message)
+                message_container = await row.query_selector(
+                    "div.message-in, div.message-out"
+                )
+                assert message_container is not None
 
-                iteration_count += 1
+                # ************************************************************************ #
+
+                message_class = await message_container.get_attribute("class")
+                assert message_class is not None
+
+                if "message-out" in message_class:
+                    sender = "You"
+                else:
+                    sender = "Sender"
+
+                # ************************************************************************ #
+
+                temp = await message_container.query_selector(
+                    "div._amk6._amlo div.copyable-text"
+                )
+                assert temp is not None
+                data_pre_plain_text = await temp.get_attribute("data-pre-plain-text")
+                assert data_pre_plain_text is not None
+
+                # LOGGER.info("Message sent time and sender: ", data_pre_plain_text)
+
+                pattern = r"\[(.*?)\] (.*?):\s*$"
+                match = re.match(pattern, data_pre_plain_text)
+                if match:
+                    time_sent = match.group(1).strip()
+                    if sender != "You":
+                        sender = match.group(2).strip()
+
+                # ************************************************************************ #
+
+                message_span = await message_container.query_selector(
+                    "span.selectable-text.copyable-text"
+                )
+                if message_span:
+                    message_text = await message_span.inner_text()
+                    message_text = message_text.strip()
+
+                # ************************************************************************ #
+
+                message = {
+                    "sender": sender,
+                    "time_sent": time_sent,
+                    "message": message_text,
+                }
+
+                messages.append(message)
+
             except Exception as e:
-                logging.error(f"Error while fetching messages: {e}")
+                print(f"Error parsing message row: {e}")
+                continue
 
-            self.page.wait_for_timeout(1000)
+        return messages
 
-    def getChatHistory(self, n: int):
-        logging.info(f"Fetching chat history for the last {n} messages.")
+    async def getChatHistory(self, n: int):
+        logger.info(f"Fetching chat history for the last {n} messages.")
         selector = "div[role='application']"
-        mainDiv = self.page.wait_for_selector(selector)
-        time.sleep(1)
+        mainDiv = await self.page.wait_for_selector(selector)
+        await asyncio.sleep(1)
         if not mainDiv:
-            logging.error("Error in opening Chat Panel.")
+            logger.error("Error in opening Chat Panel.")
             raise Error("Error in opening Chat Panel....")
 
-        chats = mainDiv.query_selector_all("div[role='row']")
+        chats = await mainDiv.query_selector_all("div[role='row']")
         if not chats:
-            logging.error("Error in fetching chats.")
+            logger.error("Error in fetching chats.")
             raise Error("Error in fetching chats....")
 
         formattedChats = []
@@ -196,16 +345,16 @@ class WhatsappClient:
             chats.reverse()
             chats = chats[:n]
             for chat in chats:
-                copyText = chat.query_selector(".copyable-text")
+                copyText = await chat.query_selector(".copyable-text")
                 if not copyText:
                     continue
 
-                prePlainText = copyText.get_attribute("data-pre-plain-text")
-                message = chat.query_selector(".copyable-text span")
+                prePlainText = await copyText.get_attribute("data-pre-plain-text")
+                message = await chat.query_selector(".copyable-text span")
 
                 if not message or not prePlainText:
                     continue
-                messageText = message.inner_text()
+                messageText = await message.inner_text()
 
                 # Use regex to extract the name and time from data-pre-plain-text
                 match = re.search(r"\[(.*?)\] (.*?): ", prePlainText)
@@ -217,58 +366,10 @@ class WhatsappClient:
                     formattedChats.append(
                         {"name": name, "time": t, "message": messageText}
                     )
-        logging.info(f"Fetched chat history: {formattedChats}")
+        logger.info(f"Fetched chat history: {formattedChats}")
         return formattedChats
 
-    def getChatHistoryByName(self, n: int, name: str):
-        logging.info(f"Fetching chat history for {name} (last {n} messages).")
-        self.openChatPanelUsingName(name)
-        selector = "div[role='application']"
-        mainDiv = self.page.wait_for_selector(selector)
-        time.sleep(1)
-        if not mainDiv:
-            logging.error(f"Error in opening Chat Panel for {name}.")
-            raise Error("Error in opening Chat Panel....")
-
-        chats = mainDiv.query_selector_all("div[role='row']")
-        if not chats:
-            logging.error(f"Error in fetching chats for {name}.")
-            raise Error("Error in fetching chats....")
-
-        formattedChats = []
-        if len(chats) >= n:
-            chats.reverse()
-            chats = chats[:n]
-            for chat in chats:
-                copyText = chat.query_selector(".copyable-text")
-                if not copyText:
-                    continue
-
-                prePlainText = copyText.get_attribute("data-pre-plain-text")
-                message = chat.query_selector(".copyable-text span")
-
-                if not message or not prePlainText:
-                    continue
-                messageText = message.inner_text()
-
-                match = re.search(r"\[(.*?)\] (.*?): ", prePlainText)
-                if match:
-                    t = match.group(1)  # Extracted time
-                    name = match.group(2)  # Extracted name
-
-                    formattedChats.append(
-                        {"name": name, "time": t, "message": messageText}
-                    )
-        logging.info(f"Fetched chat history for {name}: {formattedChats}")
-        return formattedChats
-
-    def persist(self):
-        logging.info("Browser is persisting (open indefinitely).")
-        try:
-            while True:
-                time.sleep(10)
-        except KeyboardInterrupt:
-            logging.info("Shutting down client.")
-            self.page.close()
-            self.browser.close()
-            self.playwright.stop()
+    async def getChatHistoryByName(self, n: int, name: str):
+        logger.info(f"Fetching chat history for {name} (last {n} messages).")
+        await self.openChatPanelUsingName(name)
+        return await self.getChatHistory(n)
