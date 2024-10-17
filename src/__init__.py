@@ -13,12 +13,13 @@ from playwright.async_api import (
     BrowserContext,
     Page,
 )
-from typing import Optional, Callable, Dict, Any, List
-from pathlib import Path
 import time
 import sys
+from pathlib import Path
+from typing import Optional, Callable, Dict, Any, List
 
-# <---------------------------------------------------->#
+
+# <----------------------------------------------------> #
 
 BROWSER_INSTANCE = "chromium"
 HEADLESS = False
@@ -76,11 +77,14 @@ class WhatsappClient:
     async def initialize_playwright(self):
         self.playwright = await async_playwright().start()
         logger.info(f"Launching {BROWSER_INSTANCE} with persistent context...")
+
         self.browser = await self.playwright[
             BROWSER_INSTANCE
         ].launch_persistent_context(USER_DATA_DIR, headless=HEADLESS)
+
         self.page_instance = await self.browser.new_page()
-        await self.page_instance.set_viewport_size({"width": 1920, "height": 1080})
+
+        # await self.page_instance.set_viewport_size({"width": 1920, "height": 1080})
         logger.info(f"{BROWSER_INSTANCE} launched successfully.")
 
     async def login(self):
@@ -283,7 +287,7 @@ class WhatsappClient:
 
         TODO:
             - find the user without opening the chat panel
-            - right now this function is same as openChatPanelUsingName
+            - right now this function is same as open_chat_panel
         """
         try:
             search_box = self.get_search_box_locator()
@@ -318,7 +322,7 @@ class WhatsappClient:
             await self.page.wait_for_timeout(1000)
             await self.find_user_phone(mobile)
 
-    async def openChatPanelUsingName(self, username: str):
+    async def open_chat_panel(self, username: str):
         try:
             search_box = self.get_search_box_locator()
 
@@ -342,7 +346,7 @@ class WhatsappClient:
             return False
 
     async def sendMessage(self, name: str, message: str):
-        search_input = await self.openChatPanelUsingName(name)
+        search_input = await self.open_chat_panel(name)
 
         if search_input:
             await self.clear_text()
@@ -401,7 +405,7 @@ class WhatsappClient:
 
         return obj
 
-    async def extract_attachment_details(self, row: Page) -> Dict:
+    async def extract_attachment_info(self, row: Page) -> Dict:
         """
         TODO:
             - fix everything
@@ -474,16 +478,16 @@ class WhatsappClient:
 
         async def process_row(row):
             try:
-                obj = await self.extract_basic_info(row)
-                has_attachment = await row.query_selector(
-                    "div.icon-doc-pdf, div.icon-doc-img, div.icon-doc-video, div.icon-audio-download"
+                obj, has_attachment = await asyncio.gather(
+                    self.extract_basic_info(row),
+                    row.query_selector(
+                        "div.icon-doc-pdf, div.icon-doc-img, div.icon-doc-video, div.icon-audio-download"
+                    ),
                 )
                 if has_attachment:
-                    obj["attachment_details"] = await self.extract_attachment_details(
-                        row
-                    )
+                    obj["attachment"] = await self.extract_attachment_info(row)
                 else:
-                    obj["attachment_details"] = ""
+                    obj["attachment"] = ""
 
                 return obj
 
@@ -499,5 +503,5 @@ class WhatsappClient:
 
     async def getChatHistoryByName(self, n: int, name: str):
         logger.info(f"Fetching chat history for {name} (last {n} messages).")
-        await self.openChatPanelUsingName(name)
+        await self.open_chat_panel(name)
         return (await self.extract_messages())[-n:]
