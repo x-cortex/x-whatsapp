@@ -28,9 +28,12 @@ BASE_URL = "https://web.whatsapp.com/"
 
 
 class WhatsappClient:
-    def __init__(self) -> None:
+    def __init__(self, DEBUG: bool = False) -> None:
         # Optionally we could initialize user constants (eg. phone number, x-cortex name etc.)
         # Haven't decided if we should do this or not
+
+        # TODO: If there is a better way to disable logging we can use that here ig
+        self.DEBUG = DEBUG
         self.setup_logger()
         logger.info("Starting Playwright...")
         self.playwright: Optional[Playwright] = None
@@ -63,18 +66,21 @@ class WhatsappClient:
 
     def setup_logger(self):
         """Initializes and configures the logger."""
-        # TODO: can a better logger be made?
-        logger.basicConfig(
-            format="%(asctime)s - %(levelname)s - %(message)s",
-            level=logger.INFO,
-            handlers=[
-                logger.FileHandler("whatsapp_client.log"),  # Log to a file
-                logger.StreamHandler(),  # Log to console
-            ],
-        )
+        if self.DEBUG:
+            logger.basicConfig(
+                format="%(asctime)s - %(levelname)s - %(message)s",
+                level=logger.INFO,
+                handlers=[
+                    logger.FileHandler("whatsapp_client.log"),  # Log to a file
+                    logger.StreamHandler(),  # Log to console
+                ],
+            )
+        else:
+            logger.disable()  # Disable logging if DEBUG is False
         logger.info("Logger initialized.")
 
     async def initialize_playwright(self):
+        # TODO: Perform browser level optimizations and other stuff
         self.playwright = await async_playwright().start()
         logger.info(f"Launching {BROWSER_INSTANCE} with persistent context...")
 
@@ -174,13 +180,23 @@ class WhatsappClient:
                 f"Error while scrolling down the search pane using mouse: {e}"
             )
 
-    async def chat_pane_scroll_up(self):
+    async def chat_pane_scroll_up(
+        self, scroll_duration=10, scroll_delta=1000, delay=0.1
+    ):
         """
         Scrolls up the chat pane (div with id="main") by moving the mouse cursor
         to the center of the pane and performing rapid scroll wheel actions to reach the top.
         """
+
         scroll_selector = "#main"
+        chat_panel_selector = "div[id='main']"
+
         try:
+            chat_panel = await self.page.query_selector(chat_panel_selector)
+            if not chat_panel:
+                logger.error("Could not locate the chat pane for scrolling.")
+                return
+
             pane = self.page.locator(scroll_selector)
             bounding_box = await pane.bounding_box()
             if not bounding_box:
@@ -190,26 +206,22 @@ class WhatsappClient:
             center_x = bounding_box["x"] + bounding_box["width"] / 2
             center_y = bounding_box["y"] + bounding_box["height"] / 2
 
-            previous_scroll_top = await pane.evaluate("element => element.scrollTop")
             logger.info(
                 "Starting to scroll up the chat pane to reach the top by rapid mouse scrolling."
             )
 
-            while True:
+            end_time = time.time() + scroll_duration
+            while time.time() < end_time:
                 await self.page.mouse.move(center_x, center_y)
-                await self.page.mouse.wheel(0, -1000)  # Increased scroll up delta
-                await asyncio.sleep(0.1)  # Reduced sleep time for faster scrolling
-
-                current_scroll_top = await pane.evaluate("element => element.scrollTop")
-                if current_scroll_top == previous_scroll_top:
-                    logger.info("Reached the top of the chat pane.")
-                    break
-                previous_scroll_top = current_scroll_top
+                await self.page.mouse.wheel(0, -scroll_delta)
+                await asyncio.sleep(delay)
 
         except Exception as e:
             logger.exception(f"Error while scrolling up the chat pane using mouse: {e}")
+            return
 
     def get_search_box_locator(self):
+        """Returns the locator for the search box on the side pane."""
         return self.page.locator(
             "#side div[contenteditable='true'][role='textbox'][data-lexical-editor='true']"
         )
@@ -284,10 +296,6 @@ class WhatsappClient:
     async def find_user(self, username: str) -> str | bool:
         """
         Returns str | bool: chat_name if the chat is found, False otherwise.
-
-        TODO:
-            - find the user without opening the chat panel
-            - right now this function is same as open_chat_panel
         """
         try:
             search_box = self.get_search_box_locator()
@@ -295,11 +303,37 @@ class WhatsappClient:
             await search_box.click()
             await self.clear_text()
             await search_box.type(username)
-            await search_box.press("Enter")
 
-            chat_name = await self.page.locator(
-                selector='#main header ._amig span[dir="auto"]'
-            ).first.inner_text()
+            # Without this the search results gets fucked up
+            # Thanks prathwik for using async, would have worked like a charm if it was sync
+            await asyncio.sleep(0.5)
+
+            chat_list_div = await self.page.query_selector(
+                'div[aria-label="Search results."]'
+            )
+            children = await chat_list_div.query_selector_all('div[role="listitem"]')
+            chat_name = None
+
+            for chat in children:
+                name_element = await chat.query_selector('span[dir="auto"]')
+                name = await name_element.inner_text() if name_element else "Unknown"
+
+                translate_y = await chat.evaluate(
+                    "element => window.getComputedStyle(element).transform"
+                )
+
+                if translate_y:
+                    if not "matrix" in translate_y:
+                        continue
+                    parts = (
+                        translate_y.replace("matrix(", "").replace(")", "").split(", ")
+                    )
+
+                    if len(parts) == 6:
+                        translate_y = float(parts[5])
+                        if translate_y != float(72):
+                            continue
+                        chat_name = name
 
             if chat_name and chat_name.upper().startswith(username.upper()):
                 logger.info(f'Username with prefix "{username}" found as "{chat_name}"')
@@ -307,8 +341,13 @@ class WhatsappClient:
             else:
                 logger.info(f'Username with prefix "{username}" not found')
                 return False
+
         except TimeoutError:
-            logger.exception(f'It was not possible to fetch chat "{username}"')
+            logger.info(f'It was not possible to fetch chat "{username}"')
+            return False
+
+        except Exception as e:
+            logger.exception(f"Error in find_user: {e}")
             return False
 
     async def find_user_phone(self, mobile: str) -> None:
@@ -345,7 +384,7 @@ class WhatsappClient:
             logger.exception(f'It was not possible to fetch chat "{username}"')
             return False
 
-    async def sendMessage(self, name: str, message: str):
+    async def send_message(self, name: str, message: str):
         search_input = await self.open_chat_panel(name)
 
         if search_input:
@@ -501,7 +540,115 @@ class WhatsappClient:
 
         return messages
 
-    async def getChatHistoryByName(self, n: int, name: str):
+    async def extract_messages_from_chat(self, n: int, name: str):
         logger.info(f"Fetching chat history for {name} (last {n} messages).")
         await self.open_chat_panel(name)
         return (await self.extract_messages())[-n:]
+
+    async def extract_chat_details_from_side_pane(self):
+        """
+        Get the list of messages in the side pane (name, recent message, time, unread messages).
+        """
+        chat_list_div = await self.page.query_selector('div[aria-label="Chat list"]')
+        children = await chat_list_div.query_selector_all('div[role="listitem"]')
+
+        try:
+            logger.info("Chat list div found.")
+            all_chats = []
+            for chat in children:
+                name_element = await chat.query_selector('span[dir="auto"]')
+                name = await name_element.inner_text() if name_element else "Unknown"
+
+                # Sole purpose of sorting the chats based on latest message
+                translate_y = await chat.evaluate(
+                    "element => window.getComputedStyle(element).transform"
+                )
+
+                if translate_y:
+                    if "matrix" in translate_y:
+                        parts = (
+                            translate_y.replace("matrix(", "")
+                            .replace(")", "")
+                            .split(", ")
+                        )
+                        if len(parts) == 6:
+                            translate_y = float(parts[5])
+
+                    elif "translateY(0px)" in translate_y:
+                        logger.info("Div with translateY(0px) found.")
+                        translate_y = 0
+
+                recent_message_element = await chat.query_selector(
+                    'div[class="_ak8k"]>span>span'
+                )
+                recent_message = (
+                    await recent_message_element.inner_text()
+                    if recent_message_element
+                    else "No recent message"
+                )
+
+                time_element = await chat.query_selector('span[dir="auto"]')
+                time = (
+                    await time_element.inner_text()
+                    if time_element
+                    else "No time available"
+                )
+
+                unread_messages_element = await chat.query_selector(
+                    'span[aria-label*="unread"]'
+                )
+                unread_messages = (
+                    await unread_messages_element.inner_text()
+                    if unread_messages_element
+                    else "0"
+                )
+
+                all_chats.append(
+                    {
+                        "name": name,
+                        "recent_message": recent_message,
+                        "time": time,
+                        "unread_messages": unread_messages,
+                        "translate_y": translate_y,
+                    }
+                )
+
+                # This sort function is trash, Ill leave to the future me to fix it
+                all_chats.sort(key=lambda chat: chat["translate_y"])
+
+                # logger.info(
+                #     f"Chat: {name}, Recent message: {recent_message}, Time: {time}, Unread messages: {unread_messages}"
+                # )
+
+        except Exception as e:
+            logger.exception(f"Error extracting chat details from side pane: {e}")
+
+        # TODO: Additional overhead to remove the translate_y key, Ill leave it as it is for now
+        # for chat in all_chats:
+        #     chat.pop("translate_y", None)
+
+        return all_chats
+
+    async def fetch_latest_message(self):
+        latest_message = await self.extract_chat_details_from_side_pane()
+        return latest_message[0]
+
+    async def on_new_message(self, callback_function, interval: int = 1):
+        # TODO: Refactor this function
+        # When new notification is received, Trigger callback function (for now its a while loop)
+
+        logger.info("Starting to listen for new messages.")
+        # This is kinda hacky, Should be fixed when refactored for notification based trigger ig
+        messages = []
+
+        while True:
+
+            new_message = await self.fetch_latest_message()
+            if new_message not in messages:
+                messages.append(new_message)
+                logger.info(f"New message: {new_message}")
+                callback_function(new_message)
+            else:
+                continue
+
+            await asyncio.sleep(interval)
