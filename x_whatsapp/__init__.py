@@ -545,11 +545,14 @@ class WhatsappClient:
         await self.open_chat_panel(name)
         return (await self.extract_messages())[-n:]
 
+    # <----------------------------------------------------> #
+
     async def extract_chat_details_from_side_pane(self):
         """
         Get the list of messages in the side pane (name, recent message, time, unread messages).
         """
         chat_list_div = await self.page.query_selector('div[aria-label="Chat list"]')
+        assert chat_list_div is not None
         children = await chat_list_div.query_selector_all('div[role="listitem"]')
 
         try:
@@ -635,6 +638,7 @@ class WhatsappClient:
 
     async def on_new_message(self, callback_function, interval: int = 1):
         # TODO: Refactor this function
+        # Is it better to yield the message details instead of a callback function?
         # When new notification is received, Trigger callback function (for now its a while loop)
 
         logger.info("Starting to listen for new messages.")
