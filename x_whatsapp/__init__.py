@@ -303,14 +303,12 @@ class WhatsappClient:
             await search_box.click()
             await self.clear_text()
             await search_box.type(username)
-
-            # Without this the search results gets fucked up
-            # Thanks prathwik for using async, would have worked like a charm if it was sync
-            await asyncio.sleep(0.5)
+            await self.page.wait_for_timeout(1000)
 
             chat_list_div = await self.page.query_selector(
                 'div[aria-label="Search results."]'
             )
+            assert chat_list_div is not None
             children = await chat_list_div.query_selector_all('div[role="listitem"]')
             chat_name = None
 
@@ -345,7 +343,9 @@ class WhatsappClient:
         except TimeoutError:
             logger.info(f'It was not possible to fetch chat "{username}"')
             return False
-
+        except AssertionError:
+            logger.info(f'It was not possible to fetch chat "{username}"')
+            return False
         except Exception as e:
             logger.exception(f"Error in find_user: {e}")
             return False
