@@ -1,0 +1,36 @@
+[build-system]
+requires = ["flit_core >=3.2,<4"]
+build-backend = "flit_core.buildapi"
+
+[project]
+name = "x-whatsapp"
+version = "0.1.0"
+description = "A Playwright-based WhatsApp client to interact with x-cortex."
+authors = [
+    { name="Prathwik Kushal Kumar", email="prathwiklog@gmail.com" },
+    { name="Kausthubh J Rao" }
+]
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Communications :: Chat",
+]
+dependencies = [
+    "playwright>=1.33.0",
+    "asyncio>=3.4.3",
+    "typing-extensions>=4.5.0"
+    # TODO: add any other used dependencies
+]
+
+[project.urls]
+Homepage = "https://github.com/x-cortex/x-whatsapp"
+Repository = "https://github.com/x-cortex/x-whatsapp"
+Documentation = "https://github.com/x-cortex/x-whatsapp#readme"
+
+# Optional TODO: entry points for CLI
+# [project.scripts]
+# x-whatsapp-cli = "x_whatsapp.cli:main"
