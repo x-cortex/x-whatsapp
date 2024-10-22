@@ -384,6 +384,24 @@ class WhatsappClient:
             logger.exception(f'It was not possible to fetch chat "{username}"')
             return False
 
+    async def close_chat_panel(self):
+        selector = "div[aria-label='Menu']"
+        element = await self.page.query_selector_all(selector)
+
+        try:
+            is_hidden = await element[1].query_selector("span[aria-hidden='true']")
+
+            if is_hidden:
+                await element[1].click()
+                await self.page.keyboard.press("ArrowDown")
+                await self.page.keyboard.press("ArrowDown")
+                await self.page.keyboard.press("Enter")
+        except IndexError:
+            return
+        except Exception as e:
+            logger.error(f"Error closing chat panel: {e}")
+            return
+
     async def send_message(self, name: str, message: str):
         search_input = await self.open_chat_panel(name)
 
@@ -636,7 +654,12 @@ class WhatsappClient:
         latest_message = await self.extract_chat_details_from_side_pane()
         return latest_message[0]
 
-    async def on_new_message(self, callback_function, interval: int = 1):
+    async def on_new_message(
+        self,
+        callback_function,
+        interval: int = 1,
+        async_callback: bool = False,
+    ):
         # TODO: Refactor this function
         # Is it better to yield the message details instead of a callback function?
         # When new notification is received, Trigger callback function (for now its a while loop)
@@ -651,7 +674,10 @@ class WhatsappClient:
             if new_message not in messages:
                 messages.append(new_message)
                 logger.info(f"New message: {new_message}")
-                callback_function(new_message)
+                if async_callback:
+                    await callback_function(new_message)
+                else:
+                    callback_function(new_message)
             else:
                 continue
 
