@@ -654,12 +654,7 @@ class WhatsappClient:
         latest_message = await self.extract_chat_details_from_side_pane()
         return latest_message[0]
 
-    async def on_new_message(
-        self,
-        callback_function,
-        interval: int = 1,
-        async_callback: bool = False,
-    ):
+    async def on_new_message(self, callback_function, interval: int = 1):
         # TODO: Refactor this function
         # Is it better to yield the message details instead of a callback function?
         # When new notification is received, Trigger callback function (for now its a while loop)
@@ -674,10 +669,7 @@ class WhatsappClient:
             if new_message not in messages:
                 messages.append(new_message)
                 logger.info(f"New message: {new_message}")
-                if async_callback:
-                    await callback_function(new_message)
-                else:
-                    callback_function(new_message)
+                await callback_function(new_message)
             else:
                 continue
 
