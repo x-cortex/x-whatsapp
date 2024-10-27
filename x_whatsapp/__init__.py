@@ -4,7 +4,7 @@ Playwright based WhatsApp client to interact with x-cortex.
 
 import re
 import os
-import logging as logger
+import logging
 import asyncio
 from playwright.async_api import (
     Error,
@@ -32,13 +32,32 @@ class WhatsappClient:
         # Optionally we could initialize user constants (eg. phone number, x-cortex name etc.)
         # Haven't decided if we should do this or not
 
-        # TODO: If there is a better way to disable logging we can use that here ig
-        self.DEBUG = DEBUG
-        self.setup_logger()
-        logger.info("Starting Playwright...")
         self.playwright: Optional[Playwright] = None
         self.browser: Optional[BrowserContext] = None
         self.page_instance: Optional[Page] = None
+
+        # TODO: Add an option to enable/disable the self.logger as well as choose log file location
+        self.DEBUG = True
+
+        self.logger = logging.getLogger("WhatsappLogger")
+        self.logger.setLevel(logging.INFO)
+
+        filehandler = logging.FileHandler("whatsapp_client.log")
+        filehandler.setLevel(logging.INFO)
+        filehandler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
+        self.logger.addHandler(filehandler)
+
+        # Optionally add a streamhandler to stream to console
+        # streamhandler = logging.StreamHandler()
+        # streamhandler.setLevel(logging.INFO)
+        # streamhandler.setFormatter(
+        #     logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        # )
+        # self.logger.addHandler(streamhandler)
+
+        self.logger.info("Starting Playwright...")
 
     @property
     def page(self) -> Page:
@@ -64,25 +83,10 @@ class WhatsappClient:
             options["viewport"] = None
         return options
 
-    def setup_logger(self):
-        """Initializes and configures the logger."""
-        if self.DEBUG:
-            logger.basicConfig(
-                format="%(asctime)s - %(levelname)s - %(message)s",
-                level=logger.INFO,
-                handlers=[
-                    logger.FileHandler("whatsapp_client.log"),  # Log to a file
-                    logger.StreamHandler(),  # Log to console
-                ],
-            )
-        else:
-            logger.disable()  # Disable logging if DEBUG is False
-        logger.info("Logger initialized.")
-
     async def initialize_playwright(self):
         # TODO: Perform browser level optimizations and other stuff
         self.playwright = await async_playwright().start()
-        logger.info(f"Launching {BROWSER_INSTANCE} with persistent context...")
+        self.logger.info(f"Launching {BROWSER_INSTANCE} with persistent context...")
 
         self.browser = await self.playwright[
             BROWSER_INSTANCE
@@ -91,23 +95,23 @@ class WhatsappClient:
         self.page_instance = await self.browser.new_page()
 
         # await self.page_instance.set_viewport_size({"width": 1920, "height": 1080})
-        logger.info(f"{BROWSER_INSTANCE} launched successfully.")
+        self.logger.info(f"{BROWSER_INSTANCE} launched successfully.")
 
     async def login(self):
         # TODO: QR code & phone number login via script
         if os.path.exists(USER_DATA_DIR):
-            logger.info("User is already logged in. Skipping login step.")
+            self.logger.info("User is already logged in. Skipping login step.")
         else:
-            logger.info("User not logged in. Redirecting to WhatsApp login page.")
+            self.logger.info("User not logged in. Redirecting to WhatsApp login page.")
 
         await self.page.goto(BASE_URL)
         await self.page.bring_to_front()
 
-        logger.info("Waiting for WhatsApp chats to load...")
+        self.logger.info("Waiting for WhatsApp chats to load...")
         await self.page.wait_for_selector(
             '//*[@id="pane-side"]/div[2]/div/div/child::div', timeout=600000
         )
-        logger.info("WhatsApp chats loaded.")
+        self.logger.info("WhatsApp chats loaded.")
 
     async def logout(self):
         try:
@@ -126,11 +130,11 @@ class WhatsappClient:
 
             return True
         except TimeoutError as e:
-            logger.exception(f"Timeout error during logout: {str(e)}")
+            self.logger.exception(f"Timeout error during logout: {str(e)}")
         except Exception as e:
-            logger.exception(f"Unexpected error during logout: {str(e)}")
+            self.logger.exception(f"Unexpected error during logout: {str(e)}")
 
-        logger.error("Logout failed")
+        self.logger.error("Logout failed")
         return False
 
     async def clear_text(self):
@@ -151,14 +155,14 @@ class WhatsappClient:
             pane = self.page.locator(scroll_selector)
             bounding_box = await pane.bounding_box()
             if not bounding_box:
-                logger.error("Could not locate the search pane for scrolling.")
+                self.logger.error("Could not locate the search pane for scrolling.")
                 return
 
             center_x = bounding_box["x"] + bounding_box["width"] / 2
             center_y = bounding_box["y"] + bounding_box["height"] / 2
 
             previous_height = await pane.evaluate("element => element.scrollHeight")
-            logger.info(
+            self.logger.info(
                 "Starting to scroll down the search pane to load all chats by rapid mouse scrolling."
             )
 
@@ -169,14 +173,14 @@ class WhatsappClient:
 
                 current_height = await pane.evaluate("element => element.scrollHeight")
                 if current_height == previous_height:
-                    logger.info(
+                    self.logger.info(
                         "Reached the bottom of the search pane. All chats are loaded."
                     )
                     break
                 previous_height = current_height
 
         except Exception as e:
-            logger.exception(
+            self.logger.exception(
                 f"Error while scrolling down the search pane using mouse: {e}"
             )
 
@@ -194,19 +198,19 @@ class WhatsappClient:
         try:
             chat_panel = await self.page.query_selector(chat_panel_selector)
             if not chat_panel:
-                logger.error("Could not locate the chat pane for scrolling.")
+                self.logger.error("Could not locate the chat pane for scrolling.")
                 return
 
             pane = self.page.locator(scroll_selector)
             bounding_box = await pane.bounding_box()
             if not bounding_box:
-                logger.error("Could not locate the chat pane for scrolling.")
+                self.logger.error("Could not locate the chat pane for scrolling.")
                 return
 
             center_x = bounding_box["x"] + bounding_box["width"] / 2
             center_y = bounding_box["y"] + bounding_box["height"] / 2
 
-            logger.info(
+            self.logger.info(
                 "Starting to scroll up the chat pane to reach the top by rapid mouse scrolling."
             )
 
@@ -217,7 +221,9 @@ class WhatsappClient:
                 await asyncio.sleep(delay)
 
         except Exception as e:
-            logger.exception(f"Error while scrolling up the chat pane using mouse: {e}")
+            self.logger.exception(
+                f"Error while scrolling up the chat pane using mouse: {e}"
+            )
             return
 
     def get_search_box_locator(self):
@@ -274,10 +280,10 @@ class WhatsappClient:
             )
 
             if not selector:
-                logger.info("No focused element found.")
+                self.logger.info("No focused element found.")
                 return None
 
-            logger.info(f"Generated selector: {selector}")
+            self.logger.info(f"Generated selector: {selector}")
 
             locator = self.page.locator(selector)
 
@@ -286,11 +292,11 @@ class WhatsappClient:
             if is_visible:
                 return locator
             else:
-                logger.info("Locator does not point to a visible element.")
+                self.logger.info("Locator does not point to a visible element.")
                 return None
 
         except Exception as e:
-            logger.exception(f"Error in get_focused_element_locator: {e}")
+            self.logger.exception(f"Error in get_focused_element_locator: {e}")
             return None
 
     async def find_user(self, username: str) -> str | bool:
@@ -334,20 +340,22 @@ class WhatsappClient:
                         chat_name = name
 
             if chat_name and chat_name.upper().startswith(username.upper()):
-                logger.info(f'Username with prefix "{username}" found as "{chat_name}"')
+                self.logger.info(
+                    f'Username with prefix "{username}" found as "{chat_name}"'
+                )
                 return chat_name
             else:
-                logger.info(f'Username with prefix "{username}" not found')
+                self.logger.info(f'Username with prefix "{username}" not found')
                 return False
 
         except TimeoutError:
-            logger.info(f'It was not possible to fetch chat "{username}"')
+            self.logger.info(f'It was not possible to fetch chat "{username}"')
             return False
         except AssertionError:
-            logger.info(f'It was not possible to fetch chat "{username}"')
+            self.logger.info(f'It was not possible to fetch chat "{username}"')
             return False
         except Exception as e:
-            logger.exception(f"Error in find_user: {e}")
+            self.logger.exception(f"Error in find_user: {e}")
             return False
 
     async def find_user_phone(self, mobile: str) -> None:
@@ -357,7 +365,7 @@ class WhatsappClient:
             await self.page.goto(link)
             await self.page.wait_for_load_state("networkidle")
         except TimeoutError as bug:
-            logger.exception(f"An exception occurred: {bug}")
+            self.logger.exception(f"An exception occurred: {bug}")
             await self.page.wait_for_timeout(1000)
             await self.find_user_phone(mobile)
 
@@ -375,13 +383,13 @@ class WhatsappClient:
             ).first.inner_text()
 
             if chat_name:
-                logger.info(f'Opened the chat panel of "{chat_name}"')
+                self.logger.info(f'Opened the chat panel of "{chat_name}"')
                 return chat_name
             else:
-                logger.info(f'Username with prefix "{username}" not found')
+                self.logger.info(f'Username with prefix "{username}" not found')
                 return False
         except TimeoutError:
-            logger.exception(f'It was not possible to fetch chat "{username}"')
+            self.logger.exception(f'It was not possible to fetch chat "{username}"')
             return False
 
     async def close_chat_panel(self):
@@ -399,7 +407,7 @@ class WhatsappClient:
         except IndexError:
             return
         except Exception as e:
-            logger.error(f"Error closing chat panel: {e}")
+            self.logger.error(f"Error closing chat panel: {e}")
             return
 
     async def send_message(self, name: str, message: str):
@@ -412,9 +420,11 @@ class WhatsappClient:
             await self.page.wait_for_timeout(100)
             await self.page.keyboard.press("Enter")
 
-            logger.info(f"Sending message to {search_input}: {message}")
+            self.logger.info(f"Sending message to {search_input}: {message}")
         else:
-            logger.error(f"Failed to send message to {name}. Search input not found.")
+            self.logger.error(
+                f"Failed to send message to {name}. Search input not found."
+            )
 
     async def extract_basic_info(self, row) -> Dict:
         """
@@ -559,7 +569,7 @@ class WhatsappClient:
         return messages
 
     async def extract_messages_from_chat(self, n: int, name: str):
-        logger.info(f"Fetching chat history for {name} (last {n} messages).")
+        self.logger.info(f"Fetching chat history for {name} (last {n} messages).")
         await self.open_chat_panel(name)
         return (await self.extract_messages())[-n:]
 
@@ -574,7 +584,7 @@ class WhatsappClient:
         children = await chat_list_div.query_selector_all('div[role="listitem"]')
 
         try:
-            logger.info("Chat list div found.")
+            self.logger.info("Chat list div found.")
             all_chats = []
             for chat in children:
                 name_element = await chat.query_selector('span[dir="auto"]')
@@ -596,7 +606,7 @@ class WhatsappClient:
                             translate_y = float(parts[5])
 
                     elif "translateY(0px)" in translate_y:
-                        logger.info("Div with translateY(0px) found.")
+                        self.logger.info("Div with translateY(0px) found.")
                         translate_y = 0
 
                 recent_message_element = await chat.query_selector(
@@ -637,12 +647,12 @@ class WhatsappClient:
                 # This sort function is trash, Ill leave to the future me to fix it
                 all_chats.sort(key=lambda chat: chat["translate_y"])
 
-                # logger.info(
+                # self.logger.info(
                 #     f"Chat: {name}, Recent message: {recent_message}, Time: {time}, Unread messages: {unread_messages}"
                 # )
 
         except Exception as e:
-            logger.exception(f"Error extracting chat details from side pane: {e}")
+            self.logger.exception(f"Error extracting chat details from side pane: {e}")
 
         # TODO: Additional overhead to remove the translate_y key, Ill leave it as it is for now
         # for chat in all_chats:
@@ -659,7 +669,7 @@ class WhatsappClient:
         # Is it better to yield the message details instead of a callback function?
         # When new notification is received, Trigger callback function (for now its a while loop)
 
-        logger.info("Starting to listen for new messages.")
+        self.logger.info("Starting to listen for new messages.")
         # This is kinda hacky, Should be fixed when refactored for notification based trigger ig
         messages = []
 
@@ -668,7 +678,7 @@ class WhatsappClient:
             new_message = await self.fetch_latest_message()
             if new_message not in messages:
                 messages.append(new_message)
-                logger.info(f"New message: {new_message}")
+                self.logger.info(f"New message: {new_message}")
                 await callback_function(new_message)
             else:
                 continue
