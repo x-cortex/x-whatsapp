@@ -4,7 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "x-whatsapp"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Playwright-based WhatsApp client to interact with x-cortex."
 authors = [
     { name="Prathwik Kushal Kumar", email="prathwiklog@gmail.com" },
