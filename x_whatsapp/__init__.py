@@ -410,7 +410,18 @@ class WhatsappClient:
             self.logger.error(f"Error closing chat panel: {e}")
             return
 
-    async def send_message(self, name: str, message: str):
+    async def send_message(self, message: str):
+        try:
+            await self.clear_text()
+            await self.page.keyboard.type(message, delay=20)
+            await self.page.keyboard.press("Enter")
+            await self.page.wait_for_timeout(100)
+            await self.page.keyboard.press("Enter")
+            self.logger.info(f"Sending message: {message}")
+        except Exception as e:
+            self.logger.exception(f"Error sending message: {e}")
+
+    async def send_message_to_chat(self, name: str, message: str):
         search_input = await self.open_chat_panel(name)
 
         if search_input:
@@ -664,7 +675,7 @@ class WhatsappClient:
         latest_message = await self.extract_chat_details_from_side_pane()
         return latest_message[0]
 
-    async def on_new_message(self, callback_function, interval: int = 1):
+    async def on_new_message(self, callback_function: Callable, interval: int = 1):
         # TODO: Refactor this function
         # Is it better to yield the message details instead of a callback function?
         # When new notification is received, Trigger callback function (for now its a while loop)
